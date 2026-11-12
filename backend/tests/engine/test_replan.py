@@ -144,3 +144,39 @@ def test_cronograma_a_partir_de_um_instante():
     assert H2 >= H + 10 - 1e-9 or H2 > H  # partir mais tarde nunca volta mais cedo
     r = objetivo_dia(inst, P, estado_em(inst, plano.route, 0.5), plano.route[1:-1])
     assert r.objetivo == pytest.approx(plano.objective, abs=0.6 * P.gamma)  # difere só pelo 0,5 min de atraso na partida
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_regra_sem_extra_nunca_tem_mais_hora_extra_que_a_regra(seed):
+    from engine.replan import inserir_regra_sem_extra
+    inst, plano, ext, novo = cenario(seed)
+    e = estado_em(inst, plano.route, 80)
+    restante = plano.route[len(e.prefix):-1]
+    a = inserir_regra(ext, P, e, restante, novo)
+    a2 = inserir_regra_sem_extra(ext, P, e, restante, novo)
+    assert a2.atendida == a.atendida
+    if a.atendida:
+        assert a2.excesso <= a.excesso + 1e-9
+        assert len(a2.retiradas) >= len(a.retiradas)
+        assert viavel(ext, e, a2.suffix)
+
+
+def test_replanejar_informa_as_visitas_retiradas():
+    from engine.replan import replanejar
+    inst, plano, ext, novo = cenario(2, s=60)
+    e = estado_em(inst, plano.route, 90)
+    restante = plano.route[len(e.prefix):-1]
+    r = replanejar(ext, P, e, restante, novo, reotimizar_restante=False)
+    assert r.status == "atendida" and novo in r.resultado.suffix
+    assert set(r.retiradas) == set(r.resultado.retiradas)
+    assert set(r.retiradas.values()) <= {"retirada_por_urgencia"}
+
+
+def test_replanejar_urgencia_excedente_avisa_a_gestao():
+    from engine.replan import replanejar
+    inst, plano, ext, novo = cenario(2, s=400)  # visita mais longa que a jornada inteira
+    e = estado_em(inst, plano.route, 90)
+    restante = plano.route[len(e.prefix):-1]
+    r = replanejar(ext, P, e, restante, novo)
+    assert r.status == "urgencia_excedente" and not r.resultado.atendida
+    assert r.minutos_faltando > 0 and "gestão" in r.mensagem

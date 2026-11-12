@@ -22,7 +22,8 @@ from . import alns
 from .instance import Params
 from .io import ensure_matrix, instance_from_files
 from .preprocess import to_visit
-from .replan import estado_em, estender_por_no, inserir_regra, planejar_do_zero, reotimizar
+from .replan import (estado_em, estender_por_no, inserir_regra, inserir_regra_sem_extra, planejar_do_zero,
+                     reotimizar)
 
 RESULTADOS = Path(__file__).resolve().parents[1] / "data" / "resultados"
 
@@ -59,18 +60,19 @@ def main(argv=None):
         estado = estado_em(inst, plano.route, tau)
         restante = plano.route[len(estado.prefix):-1]
         A = inserir_regra(ext, p, estado, restante, inst.n)
+        A2 = inserir_regra_sem_extra(ext, p, estado, restante, inst.n)
         B = reotimizar(ext, p_b, estado, A, restante) if A.atendida else A
         C = planejar_do_zero(ext, p)
         linha = {"evento": ev, "tau": tau, "casa": h.id, "grave": int(nova.grave), "feitas": len(estado.prefix) - 1,
                  "restante_plano": len(restante)}
-        for r in (A, B, C):
-            k = r.estrategia[0]
+        for r in (A, A2, B, C):
+            k = r.estrategia.split("_")[0]
             linha |= {f"{k}_atendida": int(r.atendida), f"{k}_retiradas": len(r.retiradas), f"{k}_objetivo": r.objetivo,
                       f"{k}_caminhada": r.caminhada, f"{k}_residual": r.residual, f"{k}_excesso": r.excesso,
                       f"{k}_H": r.H, f"{k}_cabe_em_Tmax": int(r.H <= inst.Tmax + 1e-9),
                       f"{k}_tempo_s": r.runtime_s}
         linhas.append(linha)
-        print(f"  evento {ev:2d} · tau {tau:4.0f} · A {A.objetivo:8.1f} (−{len(A.retiradas)}) · "
+        print(f"  evento {ev:2d} · tau {tau:4.0f} · A {A.objetivo:8.1f} (−{len(A.retiradas)}) · A2 {A2.objetivo:8.1f} (−{len(A2.retiradas)}) · "
               f"B {B.objetivo:8.1f} (−{len(B.retiradas)}) · C {C.objetivo:8.1f}", flush=True)
         sys.stdout.flush()
 
@@ -79,8 +81,10 @@ def main(argv=None):
     print(f"\n{len(ok)} de {len(linhas)} eventos com urgência atendida pela regra A")
     if ok:
         print(f"distância à referência C: A {statistics.fmean(gap('A')):.2f}% (pior {max(gap('A')):.2f}%) · "
+              f"A2 {statistics.fmean(gap('A2')):.2f}% (pior {max(gap('A2')):.2f}%) · "
               f"B {statistics.fmean(gap('B')):.2f}% (pior {max(gap('B')):.2f}%)")
         print(f"visitas retiradas: A {statistics.fmean(l['A_retiradas'] for l in ok):.1f} · "
+              f"A2 {statistics.fmean(l['A2_retiradas'] for l in ok):.1f} · "
               f"B {statistics.fmean(l['B_retiradas'] for l in ok):.1f}")
         print(f"tempo: A {1000 * statistics.fmean(l['A_tempo_s'] for l in ok):.1f} ms · "
               f"B {statistics.fmean(l['B_tempo_s'] for l in ok):.1f} s ({len(seeds)} sementes)")

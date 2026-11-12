@@ -121,9 +121,10 @@ def _graves_ok(inst: Instance, ids: list[int]) -> bool:
     return len(graves) <= max(inst.K, sum(inst.visits[i].urgent for i in graves))
 
 
-def viavel(inst: Instance, estado: Estado, suffix: list[int]) -> bool:
+def viavel(inst: Instance, estado: Estado, suffix: list[int], H_max: float | None = None) -> bool:
+    """Janelas, graves e retorno até `H_max` (padrão: Tmax)."""
     H, _, ok = cronograma(inst, [estado.pos, *suffix, 0], estado.clock)
-    return ok and H <= inst.Tmax + 1e-9 and _graves_ok(inst, estado.prefix[1:] + suffix)
+    return ok and H <= (inst.Tmax if H_max is None else H_max) + 1e-9 and _graves_ok(inst, estado.prefix[1:] + suffix)
 
 
 def objetivo_dia(inst: Instance, params: Params, estado: Estado, suffix: list[int]) -> Resultado:
@@ -138,28 +139,37 @@ def objetivo_dia(inst: Instance, params: Params, estado: Estado, suffix: list[in
 
 
 # ---------- A: regra da proposta ----------
-def inserir_regra(inst: Instance, params: Params, estado: Estado, suffix: list[int], nova: int) -> Resultado:
+def inserir_regra(inst: Instance, params: Params, estado: Estado, suffix: list[int], nova: int,
+                  H_max: float | None = None, nome: str = "A_regra") -> Resultado:
     """
     Insere `nova` (índice em `inst`, já marcada como urgente) logo depois da posição atual. Enquanto o
     restante não couber (janela, Tmax ou teto de graves), retira a visita não urgente de menor penalidade
     (se o problema é o teto de graves, só entre as graves). `atendida` = False se mesmo sem nenhuma visita
-    não urgente a nova urgência não cabe.
+    não urgente a nova urgência não cabe. `H_max` é até quando o ACS pode voltar (padrão: Tmax, como na proposta).
     """
     start = perf_counter()
     cand, retiradas = [nova, *suffix], []
     while True:
         graves_ok = _graves_ok(inst, estado.prefix[1:] + cand)
-        if viavel(inst, estado, cand):
+        if viavel(inst, estado, cand, H_max):
             r = objetivo_dia(inst, params, estado, cand)
-            r.estrategia, r.retiradas, r.runtime_s = "A_regra", retiradas, perf_counter() - start
+            r.estrategia, r.retiradas, r.runtime_s = nome, retiradas, perf_counter() - start
             return r
         removiveis = [i for i in cand if not inst.visits[i].urgent and (inst.visits[i].grave or graves_ok)]
         if not removiveis:
-            return Resultado(estrategia="A_regra", atendida=False, retiradas=retiradas,
-                             runtime_s=perf_counter() - start)
+            return Resultado(estrategia=nome, atendida=False, retiradas=retiradas, runtime_s=perf_counter() - start)
         pior = min(removiveis, key=lambda i: (inst.visits[i].penalty, -i))
         cand.remove(pior)
         retiradas.append(pior)
+
+
+def inserir_regra_sem_extra(inst: Instance, params: Params, estado: Estado, suffix: list[int], nova: int) -> Resultado:
+    """
+    Variante da regra A: retira visitas até o ACS voltar dentro da jornada nominal T (sem hora extra). Se nem
+    assim cabe (ou o ACS já passou de T), cai na regra da proposta, que aceita até Tmax.
+    """
+    r = inserir_regra(inst, params, estado, suffix, nova, H_max=inst.T, nome="A2_sem_extra")
+    return r if r.atendida else inserir_regra(inst, params, estado, suffix, nova, nome="A2_sem_extra")
 
 
 # ---------- B: ALNS no restante do dia ----------
@@ -214,3 +224,37 @@ def planejar_do_zero(inst: Instance, params: Params) -> Resultado:
     r = objetivo_dia(inst, params, Estado(prefix=[0], clock=0.0, walk=0.0), sol.route[1:-1])
     r.estrategia, r.runtime_s = "C_referencia", perf_counter() - start
     return r
+
+
+# ---------- uso: aviso à gestão ----------
+@dataclass
+class Replanejamento:
+    """Resposta de `replanejar`: o novo restante do dia e o que a gestão precisa saber."""
+    status: str                                           # "atendida" ou "urgencia_excedente"
+    resultado: Resultado                                  # restante do dia escolhido (vazio se excedente)
+    retiradas: dict[int, str] = field(default_factory=dict)  # visita → motivo (`retirada_por_urgencia`)
+    minutos_faltando: float = 0.0                         # se excedente: quanto passa de Tmax mesmo só com urgências
+    mensagem: str = ""
+
+
+def replanejar(inst: Instance, params: Params, estado: Estado, restante: list[int], nova: int,
+               reotimizar_restante: bool = True) -> Replanejamento:
+    """
+    Recomendação para uma urgência que surgiu: regra da proposta e, se `reotimizar_restante`, ALNS no restante
+    do dia partindo dela (nunca pior). Se a nova urgência não cabe nem sem nenhuma visita não urgente, devolve
+    `urgencia_excedente` para a gestão decidir (acionar outro agente, ou abrir mão de outra urgência).
+    """
+    a = inserir_regra(inst, params, estado, restante, nova)
+    if not a.atendida:
+        so_urgentes = [nova, *(i for i in restante if inst.visits[i].urgent)]
+        H, _, _ = cronograma(inst, [estado.pos, *so_urgentes, 0], estado.clock)
+        falta = max(0.0, H - inst.Tmax) if H < INF else INF
+        return Replanejamento(
+            status="urgencia_excedente", resultado=a, minutos_faltando=falta,
+            mensagem="A nova urgência não cabe na jornada nem retirando todas as visitas não urgentes"
+                     + (f" (faltam {falta:.0f} min)." if falta < INF else " (janela de horário incompatível).")
+                     + " Acionar a gestão.")
+    r = reotimizar(inst, params, estado, a, restante) if reotimizar_restante else a
+    ret = {i: "retirada_por_urgencia" for i in r.retiradas}
+    return Replanejamento(status="atendida", resultado=r, retiradas=ret,
+                          mensagem=f"Urgência incluída; {len(ret)} visita(s) não urgente(s) retirada(s) do restante do dia.")
