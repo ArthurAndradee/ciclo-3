@@ -32,7 +32,7 @@ Todos os cenários usam a mesma UBS (Bom Jesus, Porto Alegre), 1 ACS por microá
 
 ## Limitações e próximos passos
 
-- **Alta urgência:** é o pior caso da ALNS contra o MILP, com *gap* médio de 2,96% e pior caso de 14,78%. Com 18 urgências obrigatórias e precedentes, sobra pouca liberdade e a ALNS às vezes fixa uma ordem ruim. Um operador de realocação (*or-opt*/2-opt) dentro do bloco de urgências deve reduzir esse *gap* (achado do P15).
+- **Alta urgência:** é o pior caso da ALNS contra o MILP, com *gap* médio de 2,96% e pior caso de 14,78%. Com 18 urgências obrigatórias e precedentes, sobra pouca liberdade e a ALNS às vezes fixa uma ordem ruim. O 2-opt e o or-opt já estavam na ALNS e não resolviam; o Ciclo 3 resolveu com um operador que reabre a ordem das urgências (gap 0,00% nos 5 cenários). Detalhes em [melhorias-ciclo3.md](melhorias-ciclo3.md).
 - **Instâncias completas:** em 60 s, o MILP não prova a otimalidade (limitante *big-M* fraco). Por isso, ele só serve de referência em subinstâncias.
 - **Dados sintéticos:** os parâmetros clínicos (`w`, `P`, `s`, probabilidades) são ilustrativos. Os números de demanda não atendida dizem mais sobre o gerador do que sobre uma equipe real.
 
