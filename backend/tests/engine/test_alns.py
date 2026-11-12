@@ -93,3 +93,25 @@ def test_sem_candidatas_nao_urgentes(inst):
     inst.visits[1].urgent = True
     sol = alns.solve(inst, FAST)
     assert sol.feasible and sorted(sol.route[1:-1]) == [1, 2]
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_destruicao_da_ordem_das_urgencias_preserva_as_visitas(seed):
+    inst = random_instance(seed)
+    a = ALNS(inst, FAST, seed)
+    route = greedy.solve(inst, FAST).route
+    u = len(inst.urgent)
+    for _ in range(30):
+        cand = a.destroy_urgent_order(route, 3)
+        assert cand[0] == 0 and cand[-1] == 0 and len(set(cand[1:-1])) == len(cand) - 2
+        assert sorted(cand[1:1 + u]) == sorted(route[1:1 + u])  # o bloco de urgências continua sendo o mesmo conjunto
+        assert set(cand) <= set(route)
+        assert a.objective(cand) < float("inf")
+
+
+def test_destruicao_da_ordem_das_urgencias_muda_a_ordem_alguma_vez():
+    inst = next(i for i in (random_instance(s) for s in range(40)) if len(i.urgent) >= 3)
+    a = ALNS(inst, FAST, 0)
+    route = greedy.solve(inst, FAST).route
+    u = len(inst.urgent)
+    assert any(a.destroy_urgent_order(route, 1)[1:1 + u] != route[1:1 + u] for _ in range(60))

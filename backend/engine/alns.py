@@ -3,7 +3,7 @@ ALNS: Busca Adaptativa em Grandes Vizinhanças (etapa 2 do algoritmo, §6.5 da p
 
 Parte da construção gulosa e repete, até `iterations` ou `time_limit_s`:
   1. destruição: tira de 10% a 40% das visitas não urgentes (aleatória, pior custo, geográfica/Shaw,
-     segmento contíguo, arestas caras);
+     segmento contíguo, arestas caras) ou, antes de tirar, reabre a ordem das urgências (destroy_urgent_order);
   2. reparo: reinsere visitas, removidas ou que já estavam fora (inserção gulosa, regret-2, maior
      penalidade primeiro, inserção mais barata, agrupada); só insere quando melhora o objetivo, sempre
      respeitando janelas, Tmax e o teto de graves;
@@ -14,7 +14,8 @@ Parte da construção gulosa e repete, até `iterations` ou `time_limit_s`:
      segmento de 25 iterações, os pesos da roleta são atualizados.
 
 O objetivo é o de evaluation.py (minimizar caminhada + β·penalidade residual + γ·excesso). As urgências
-ficam fixas no início (construídas pelo guloso); os operadores só mexem no bloco das não urgentes.
+ficam sempre no início; os operadores de destruição e reparo só mexem no bloco das não urgentes, e a ordem
+das urgências só muda por destroy_urgent_order, pela busca local (2-opt, or-opt) e pela sanitização.
 
 Inserções são avaliadas em O(1) com o esquema de folgas de Savelsbergh (RouteState); a rota escolhida
 é sempre conferida pelo cronograma completo (`timing`).
@@ -104,7 +105,7 @@ class ALNS:
         self.limit = greedy.graves_limit(inst, urgent)
         self.regular = [c for c in inst.candidates if not vis[c].urgent]
         self.destroy_ops = [self.destroy_random, self.destroy_worst, self.destroy_shaw,
-                            self.destroy_segment, self.destroy_expensive]
+                            self.destroy_segment, self.destroy_expensive, self.destroy_urgent_order]
         self.repair_ops = [self.repair_greedy, self.repair_regret, self.repair_by_penalty,
                            self.repair_cheapest, self.repair_cluster]
 
@@ -196,6 +197,33 @@ class ALNS:
             scored.append((t[a, i] + t[i, b] - t[a, b] + vis[i].s, k))
         scored.sort(reverse=True)
         return self._remove(route, [k for _, k in scored[:q]])
+
+    def destroy_urgent_order(self, route, q):
+        """
+        Reabre a ordem das urgências: troca duas, move uma para outra posição ou inverte um trecho do bloco
+        de urgências e, em seguida, destrói `q` visitas do restante (destroy_random). A ordem das urgências e
+        o fim do bloco determinam por onde a rota segue; mudar só a ordem piora o plano até o restante ser
+        reordenado junto, e a busca local, que aceita um movimento por vez, não faz isso. Aqui os dois
+        movimentos acontecem na mesma iteração e o Simulated Annealing decide se aceita.
+        Sem pelo menos 2 urgências, ou se a nova ordem violar janela ou jornada, vira destroy_random.
+        """
+        u = self.first - 1
+        if u < 2:
+            return self.destroy_random(route, q)
+        block = route[1:self.first]
+        kind = self.rng.randrange(3)
+        i, j = sorted(self.rng.sample(range(u), 2))
+        if kind == 0:                                   # troca duas urgências
+            block[i], block[j] = block[j], block[i]
+        elif kind == 1:                                 # move uma urgência para outra posição do bloco
+            block.insert(j, block.pop(i))
+        else:                                           # inverte um trecho do bloco
+            block[i:j + 1] = block[i:j + 1][::-1]
+        cand = [0] + block + route[self.first:]
+        H, _, ok = timing(self.inst, cand)
+        if not ok or H > self.inst.Tmax + 1e-9:
+            return self.destroy_random(route, q)
+        return self.destroy_random(cand, q)
 
     # ---------- reparo (só insere com ganho no objetivo) ----------
     def _best_move(self, state, c):
